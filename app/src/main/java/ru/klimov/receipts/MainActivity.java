@@ -8,6 +8,12 @@ import android.database.sqlite.SQLiteDatabase;
 import android.graphics.Color;
 import android.net.Uri;
 import android.provider.MediaStore;
+import android.provider.Settings;
+import android.provider.MediaStore.Downloads;
+import android.content.ContentValues;
+import android.content.ContentUris;
+import android.os.Environment;
+import android.provider.Settings;
 import android.view.*;
 import android.widget.*;
 import androidx.core.content.FileProvider;
@@ -16,6 +22,8 @@ import java.math.BigDecimal;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import android.graphics.drawable.GradientDrawable;
+import android.util.Base64;
 
 public class MainActivity extends Activity {
  SQLiteDatabase db; LinearLayout page, rows; TextView heading, totals;
@@ -28,6 +36,7 @@ public class MainActivity extends Activity {
   db=openOrCreateDatabase("receipts.db",MODE_PRIVATE,null);
   db.execSQL("CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, month TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL, photo TEXT NOT NULL, created TEXT NOT NULL)");
   db.execSQL("CREATE TABLE IF NOT EXISTS advances(id INTEGER PRIMARY KEY, month TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL)");
+  restoreBackup();
   if(state!=null) month=YearMonth.parse(state.getString("month",month.toString()));
   pending=prefs.getString("pending",null); pendingMonth=prefs.getString("pendingMonth",null);
   build();
@@ -35,16 +44,16 @@ public class MainActivity extends Activity {
  }
  @Override protected void onSaveInstanceState(Bundle s){super.onSaveInstanceState(s);s.putString("month",month.toString());}
  int dp(int x){return (int)(x*getResources().getDisplayMetrics().density);}
- TextView label(String text,int size){TextView v=new TextView(this);v.setText(text);v.setTextSize(size);v.setTextColor(Color.rgb(25,42,61));v.setPadding(0,dp(8),0,dp(8));return v;}
- Button button(String text,Runnable fn){Button b=new Button(this);b.setText(text);b.setAllCaps(false);b.setOnClickListener(v->fn.run());return b;}
+ TextView label(String text,int size){TextView v=new TextView(this);v.setText(text);v.setTextSize(size);v.setTextColor(Color.rgb(232,241,255));v.setPadding(0,dp(8),0,dp(8));return v;}
+ Button button(String text,Runnable fn){Button b=new Button(this);b.setText(text);b.setTextColor(Color.WHITE);b.setAllCaps(false);b.setPadding(dp(12),dp(8),dp(12),dp(8));GradientDrawable bg=new GradientDrawable();bg.setColor(Color.rgb(22,55,92));bg.setCornerRadius(dp(14));bg.setStroke(dp(1),Color.rgb(45,126,220));b.setBackground(bg);b.setElevation(dp(5));b.setOnClickListener(v->fn.run());return b;}
  void build(){
-  ScrollView scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(1);page.setPadding(dp(20),dp(20),dp(20),dp(30));page.setBackgroundColor(Color.rgb(245,248,252));scroll.addView(page);setContentView(scroll);
+  ScrollView scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(1);page.setPadding(dp(20),dp(20),dp(20),dp(30));page.setBackgroundColor(Color.rgb(10,18,30));scroll.addView(page);setContentView(scroll);
   page.addView(label("Мои чеки",30));page.addView(label("Авансы и расходы — всё под рукой",14));
   LinearLayout nav=new LinearLayout(this);nav.addView(button("‹",()->{month=month.minusMonths(1);refresh();}));heading=label("",19);heading.setGravity(Gravity.CENTER);nav.addView(heading,new LinearLayout.LayoutParams(0,-2,1));nav.addView(button("›",()->{month=month.plusMonths(1);refresh();}));page.addView(nav);
   totals=label("",20);page.addView(totals);
   page.addView(button("＋ Сфотографировать чек",()->camera()));
   page.addView(button("＋ Загрузить чек из галереи",()->gallery()));
-  page.addView(button("＋ Получен аванс",()->editor("Получен аванс",0,"",(amount,note)->{db.execSQL("INSERT INTO advances(month,amount,note) VALUES(?,?,?)",new Object[]{month.toString(),amount,note});refresh();})));
+  page.addView(button("＋ Получен аванс",()->editor("Получен аванс",0,"",(amount,note)->{db.execSQL("INSERT INTO advances(month,amount,note) VALUES(?,?,?)",new Object[]{month.toString(),amount,note});saveBackup();refresh();})));
   page.addView(button("Отправить чеки за месяц",()->share()));
   page.addView(button("Почта получателя",()->email()));
   page.addView(label("Нажми на чек, чтобы открыть фото. Удерживай запись для изменения или удаления.",13));
@@ -61,6 +70,20 @@ public class MainActivity extends Activity {
   rows.addView(label("Авансы",21));
   try(Cursor c=db.rawQuery("SELECT id,amount,note FROM advances WHERE month=? ORDER BY id DESC",new String[]{month.toString()})){while(c.moveToNext()){long id=c.getLong(0),amount=c.getLong(1);String note=c.getString(2);TextView row=label(money(amount)+"  "+note,16);row.setOnLongClickListener(v->{actions("advances",id,amount,note,null);return true;});rows.addView(row);}}
  }
+ String b64(String s){return Base64.encodeToString(s.getBytes(java.nio.charset.StandardCharsets.UTF_8),Base64.NO_WRAP);}
+ String unb64(String s){try{return new String(Base64.decode(s,Base64.NO_WRAP),java.nio.charset.StandardCharsets.UTF_8);}catch(Exception e){return "";}}
+ Uri sharedImage(InputStream in,String name,String mime) throws IOException{
+  ContentValues cv=new ContentValues();cv.put(MediaStore.Images.Media.DISPLAY_NAME,name);cv.put(MediaStore.Images.Media.MIME_TYPE,mime);if(Build.VERSION.SDK_INT>=29)cv.put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES+"/MoiCheki");
+  Uri u=getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,cv);if(u==null)throw new IOException("Не удалось создать файл в общей папке");
+  try(OutputStream out=getContentResolver().openOutputStream(u)){if(out==null)throw new IOException("Не удалось открыть файл");byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}return u;
+ }
+ String sharedCopy(File source,String name){try(InputStream in=new FileInputStream(source)){return sharedImage(in,name,"image/jpeg").toString();}catch(Exception e){toast("Не удалось сохранить фото в общей папке");return source.getAbsolutePath();}}
+ Uri photoUri(String path){return path!=null&&path.startsWith("content://")?Uri.parse(path):uri(new File(path));}
+ void deletePhoto(String path){try{if(path!=null&&path.startsWith("content://"))getContentResolver().delete(Uri.parse(path),null,null);else if(path!=null)new File(path).delete();}catch(Exception ignored){}}
+ Uri backupUri(){try(Cursor c=getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,new String[]{MediaStore.Downloads._ID},MediaStore.Downloads.DISPLAY_NAME+"=?",new String[]{"moi_cheki_backup.txt"},null)){if(c!=null&&c.moveToFirst())return ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI,c.getLong(0));}catch(Exception ignored){}return null;}
+ void saveBackup(){try{StringBuilder s=new StringBuilder();try(Cursor c=db.rawQuery("SELECT month,amount,note,photo,created FROM receipts ORDER BY id",null)){while(c.moveToNext())s.append("R|").append(b64(c.getString(0))).append('|').append(c.getLong(1)).append('|').append(b64(c.getString(2))).append('|').append(b64(c.getString(3))).append('|').append(b64(c.getString(4))).append('\n');}try(Cursor c=db.rawQuery("SELECT month,amount,note FROM advances ORDER BY id",null)){while(c.moveToNext())s.append("A|").append(b64(c.getString(0))).append('|').append(c.getLong(1)).append('|').append(b64(c.getString(2))).append('\n');}Uri u=backupUri();ContentValues cv=new ContentValues();cv.put(MediaStore.Downloads.DISPLAY_NAME,"moi_cheki_backup.txt");cv.put(MediaStore.Downloads.MIME_TYPE,"text/plain");if(Build.VERSION.SDK_INT>=29)cv.put(MediaStore.Downloads.RELATIVE_PATH,Environment.DIRECTORY_DOWNLOADS+"/MoiCheki");if(u==null)u=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,cv);if(u!=null){try(OutputStream out=getContentResolver().openOutputStream(u,"wt")){out.write(s.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}}}catch(Exception ignored){}}
+ void restoreBackup(){if(sumSafe("receipts")>0||sumSafe("advances")>0)return;Uri u=backupUri();if(u==null)return;try(InputStream in=getContentResolver().openInputStream(u);BufferedReader r=new BufferedReader(new InputStreamReader(in))){String line;while((line=r.readLine())!=null){String[] p=line.split("\\|",-1);if(p.length>=4&&p[0].equals("A"))db.execSQL("INSERT INTO advances(month,amount,note) VALUES(?,?,?)",new Object[]{unb64(p[1]),Long.parseLong(p[2]),unb64(p[3])});else if(p.length>=6&&p[0].equals("R"))db.execSQL("INSERT INTO receipts(month,amount,note,photo,created) VALUES(?,?,?,?,?)",new Object[]{unb64(p[1]),Long.parseLong(p[2]),unb64(p[3]),unb64(p[4]),unb64(p[5])});}}catch(Exception ignored){}}
+ long sumSafe(String table){try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM "+table,null)){c.moveToFirst();return c.getLong(0);}catch(Exception e){return 0;}}
  void editor(String title,long initial,String description,Save save){
   LinearLayout box=new LinearLayout(this);box.setOrientation(1);box.setPadding(dp(20),dp(8),dp(20),0);EditText amount=new EditText(this);amount.setHint("Сумма, ₽");amount.setInputType(8194);if(initial>0)amount.setText(BigDecimal.valueOf(initial,2).toPlainString());box.addView(amount);EditText note=new EditText(this);note.setHint("Описание покупки / примечание");note.setText(description);box.addView(note);
   AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(box).setPositiveButton("Сохранить",null).setNegativeButton("Отмена",(d,w)->{if(title.equals("Новый чек"))discard();if(title.equals("Новый чек из галереи"))cancelGallery();}).create();dialog.setCanceledOnTouchOutside(false);dialog.setOnCancelListener(d->{if(title.equals("Новый чек"))discard();if(title.equals("Новый чек из галереи"))cancelGallery();});
@@ -90,20 +113,20 @@ public class MainActivity extends Activity {
   String type=getContentResolver().getType(source);String ext=type!=null&&type.toLowerCase(Locale.ROOT).contains("png")?".png":type!=null&&type.toLowerCase(Locale.ROOT).contains("webp")?".webp":".jpg";galleryFile=new File(directory,UUID.randomUUID()+ext);
   try(InputStream in=getContentResolver().openInputStream(source);OutputStream out=new FileOutputStream(galleryFile)){if(in==null)throw new IOException("Фотография недоступна");byte[] b=new byte[8192];int n,total=0;while((n=in.read(b))!=-1){total+=n;if(total>25*1024*1024)throw new IOException("Файл больше 25 МБ");out.write(b,0,n);}}
   catch(Exception e){if(galleryFile!=null)galleryFile.delete();galleryFile=null;galleryQueue.clear();toast("Не удалось загрузить фотографию: "+e.getMessage());return;}
-  editor("Новый чек из галереи",0,"",(amount,note)->{db.execSQL("INSERT INTO receipts(month,amount,note,photo,created) VALUES(?,?,?,?,?)",new Object[]{galleryMonth,amount,note,galleryFile.getAbsolutePath(),LocalDate.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))});galleryFile=null;refresh();galleryNext();});
+  editor("Новый чек из галереи",0,"",(amount,note)->{String shared=sharedCopy(galleryFile, "check_"+UUID.randomUUID()+".jpg");db.execSQL("INSERT INTO receipts(month,amount,note,photo,created) VALUES(?,?,?,?,?)",new Object[]{galleryMonth,amount,note,shared,LocalDate.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))});galleryFile.delete();galleryFile=null;saveBackup();refresh();galleryNext();});
  }
  void cancelGallery(){if(galleryFile!=null)galleryFile.delete();galleryFile=null;galleryQueue.clear();refresh();toast("Загрузка из галереи отменена");}
- void finishPhoto(){if(pending==null)return;editor("Новый чек",0,"",(amount,note)->{db.execSQL("INSERT INTO receipts(month,amount,note,photo,created) VALUES(?,?,?,?,?)",new Object[]{pendingMonth,amount,note,pending,LocalDate.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))});clearPending();refresh();});}
+ void finishPhoto(){if(pending==null)return;editor("Новый чек",0,"",(amount,note)->{String shared=sharedCopy(new File(pending),"check_"+UUID.randomUUID()+".jpg");db.execSQL("INSERT INTO receipts(month,amount,note,photo,created) VALUES(?,?,?,?,?)",new Object[]{pendingMonth,amount,note,shared,LocalDate.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))});clearPending();refresh();saveBackup();});}
  void clearPending(){pending=null;pendingMonth=null;prefs.edit().remove("pending").remove("pendingMonth").commit();}
  void discard(){if(pending!=null)new File(pending).delete();clearPending();}
- void viewPhoto(String path){String type=path.toLowerCase(Locale.ROOT).endsWith(".png")?"image/png":path.toLowerCase(Locale.ROOT).endsWith(".webp")?"image/webp":"image/jpeg";Intent i=new Intent(Intent.ACTION_VIEW).setDataAndType(uri(new File(path)),type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);try{startActivity(i);}catch(ActivityNotFoundException e){toast("Не найден просмотрщик фотографий");}}
- void actions(String table,long id,long amount,String note,String photo){new AlertDialog.Builder(this).setTitle("Запись").setItems(new String[]{"Изменить","Удалить"},(d,which)->{if(which==0)editor("Изменить запись",amount,note,(a,n)->{db.execSQL("UPDATE "+table+" SET amount=?,note=? WHERE id=?",new Object[]{a,n,id});refresh();});else new AlertDialog.Builder(this).setTitle("Удалить запись?").setMessage("Отменить удаление нельзя.").setPositiveButton("Удалить",(x,y)->{db.delete(table,"id=?",new String[]{Long.toString(id)});if(photo!=null)new File(photo).delete();refresh();}).setNegativeButton("Отмена",null).show();}).show();}
+ void viewPhoto(String path){String type=path.toLowerCase(Locale.ROOT).endsWith(".png")?"image/png":path.toLowerCase(Locale.ROOT).endsWith(".webp")?"image/webp":"image/jpeg";Intent i=new Intent(Intent.ACTION_VIEW).setDataAndType(photoUri(path),type).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);try{startActivity(i);}catch(ActivityNotFoundException e){toast("Не найден просмотрщик фотографий");}}
+ void actions(String table,long id,long amount,String note,String photo){new AlertDialog.Builder(this).setTitle("Запись").setItems(new String[]{"Изменить","Удалить"},(d,which)->{if(which==0)editor("Изменить запись",amount,note,(a,n)->{db.execSQL("UPDATE "+table+" SET amount=?,note=? WHERE id=?",new Object[]{a,n,id});saveBackup();refresh();});else new AlertDialog.Builder(this).setTitle("Удалить запись?").setMessage("Отменить удаление нельзя.").setPositiveButton("Удалить",(x,y)->{db.delete(table,"id=?",new String[]{Long.toString(id)});deletePhoto(photo);saveBackup();refresh();}).setNegativeButton("Отмена",null).show();}).show();}
  void email(){EditText e=new EditText(this);e.setInputType(33);e.setHint("example@company.ru");e.setText(prefs.getString("email",""));new AlertDialog.Builder(this).setTitle("Почта для отчётов").setView(e).setPositiveButton("Сохранить",(d,w)->prefs.edit().putString("email",e.getText().toString().trim()).apply()).setNegativeButton("Отмена",null).show();}
  void share(){
   ArrayList<Uri> photos=new ArrayList<>();StringBuilder body=new StringBuilder("Чеки за "+month+"\nПолучено: "+money(sum("advances"))+"\nРасходы: "+money(sum("receipts"))+"\nОстаток: "+money(sum("advances")-sum("receipts"))+"\n\n");long bytes=0;
-  try(Cursor c=db.rawQuery("SELECT amount,note,photo,created FROM receipts WHERE month=? ORDER BY id",new String[]{month.toString()})){while(c.moveToNext()){File f=new File(c.getString(2));if(!f.isFile()){toast("Фотография одного из чеков отсутствует");return;}photos.add(uri(f));bytes+=f.length();body.append(c.getString(3)).append(" — ").append(money(c.getLong(0))).append(" — ").append(c.getString(1)).append('\n');}}
+  try(Cursor c=db.rawQuery("SELECT amount,note,photo,created FROM receipts WHERE month=? ORDER BY id",new String[]{month.toString()})){while(c.moveToNext()){String p=c.getString(2);File f=p.startsWith("content://")?null:new File(p);if((f==null&&photoUri(p)==null)||(f!=null&&!f.isFile())){toast("Фотография одного из чеков отсутствует");return;}photos.add(photoUri(p));bytes+=f!=null?f.length():1024*1024;body.append(c.getString(3)).append(" — ").append(money(c.getLong(0))).append(" — ").append(c.getString(1)).append('\n');}}
   if(photos.isEmpty()){toast("Сначала добавь чек");return;}
-  Intent i=new Intent(Intent.ACTION_SEND_MULTIPLE);i.setType("image/jpeg");i.putParcelableArrayListExtra(Intent.EXTRA_STREAM,photos);i.putExtra(Intent.EXTRA_EMAIL,new String[]{prefs.getString("email","")});i.putExtra(Intent.EXTRA_SUBJECT,"Авансовый отчёт — "+month);i.putExtra(Intent.EXTRA_TEXT,body.toString());ClipData clip=ClipData.newRawUri("Чеки",photos.get(0));for(int n=1;n<photos.size();n++)clip.addItem(new ClipData.Item(photos.get(n)));i.setClipData(clip);i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+  Intent i=new Intent(Intent.ACTION_SEND_MULTIPLE);i.setType("image/*");i.putParcelableArrayListExtra(Intent.EXTRA_STREAM,photos);i.putExtra(Intent.EXTRA_EMAIL,new String[]{prefs.getString("email","")});i.putExtra(Intent.EXTRA_SUBJECT,"Авансовый отчёт — "+month);i.putExtra(Intent.EXTRA_TEXT,body.toString());ClipData clip=ClipData.newRawUri("Чеки",photos.get(0));for(int n=1;n<photos.size();n++)clip.addItem(new ClipData.Item(photos.get(n)));i.setClipData(clip);i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
   Runnable send=()->{try{startActivity(Intent.createChooser(i,"Отправить через почту"));}catch(ActivityNotFoundException e){toast("Установи почтовое приложение");}};
   if(bytes>18*1024*1024)new AlertDialog.Builder(this).setTitle("Большой объём вложений").setMessage("Фотографии занимают "+bytes/1024/1024+" МБ. Почтовый сервис может отклонить письмо.").setPositiveButton("Открыть письмо",(d,w)->send.run()).setNegativeButton("Отмена",null).show();else send.run();
  }
