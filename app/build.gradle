@@ -1,0 +1,8 @@
+plugins { id 'com.android.application' }
+android {
+ namespace 'ru.klimov.receipts'
+ compileSdk 35
+ buildToolsVersion "35.0.0"
+ defaultConfig { applicationId 'ru.klimov.receipts'; minSdk 26; targetSdk 34; versionCode 1; versionName '0.1' }
+}
+dependencies { implementation 'androidx.core:core:1.13.1' }
