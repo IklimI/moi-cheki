@@ -25,3 +25,31 @@ jobs:
         with:
           name: MoiCheki-preview
           path: app/build/outputs/apk/preview/app-preview.apk
+
+      - name: Build screenshot instrumentation
+        run: gradle assemblePreviewAndroidTest
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Capture actual Android screens
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: |
+            adb install app/build/outputs/apk/preview/app-preview.apk
+            adb install app/build/outputs/apk/androidTest/preview/app-preview-androidTest.apk
+            adb shell am instrument -w ru.klimov.receipts.preview.test/ru.klimov.receipts.DesignCapture
+            mkdir -p screenshots
+            adb exec-out run-as ru.klimov.receipts.preview cat files/design-0.png > screenshots/neon.png
+            adb exec-out run-as ru.klimov.receipts.preview cat files/design-1.png > screenshots/graphite.png
+            adb exec-out run-as ru.klimov.receipts.preview cat files/design-2.png > screenshots/midnight.png
+            adb exec-out run-as ru.klimov.receipts.preview cat files/design-3.png > screenshots/light.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Monthly-design-screenshots
+          path: screenshots/*.png

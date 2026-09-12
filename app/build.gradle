@@ -1,10 +1,11 @@
 plugins { id 'com.android.application' }
 android {
  namespace 'ru.klimov.receipts'
+ testBuildType "preview"
  compileSdk 35
  buildToolsVersion "35.0.0"
  buildTypes { preview { initWith debug; applicationIdSuffix '.preview'; versionNameSuffix '-preview'; matchingFallbacks = ['debug']; manifestPlaceholders = [appLabel: 'Мои чеки — макет'] } }
- defaultConfig { manifestPlaceholders = [appLabel: 'Мои чеки']; applicationId 'ru.klimov.receipts'; minSdk 26; targetSdk 34; versionCode 3; versionName '0.3' }
+ defaultConfig { testInstrumentationRunner "ru.klimov.receipts.DesignCapture"; manifestPlaceholders = [appLabel: 'Мои чеки']; applicationId 'ru.klimov.receipts'; minSdk 26; targetSdk 34; versionCode 3; versionName '0.3' }
 }
 dependencies { implementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
  implementation 'com.google.mlkit:text-recognition:16.0.1'
