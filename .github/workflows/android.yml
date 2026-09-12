@@ -15,8 +15,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle assembleDebug
+      - run: gradle assembleDebug assemblePreview
       - uses: actions/upload-artifact@v4
         with:
           name: MoiCheki-debug
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MoiCheki-preview
+          path: app/build/outputs/apk/preview/app-preview.apk

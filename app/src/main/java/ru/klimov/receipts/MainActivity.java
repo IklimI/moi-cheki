@@ -41,52 +41,34 @@ public class MainActivity extends Activity {
   db.execSQL("CREATE TABLE IF NOT EXISTS receipts(id INTEGER PRIMARY KEY, month TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL, photo TEXT NOT NULL, created TEXT NOT NULL)");
   db.execSQL("CREATE TABLE IF NOT EXISTS advances(id INTEGER PRIMARY KEY, month TEXT NOT NULL, amount INTEGER NOT NULL, note TEXT NOT NULL)");
   restoreBackup();
+  if(state!=null)screenTab=state.getInt("tab",0);
   if(state!=null) month=YearMonth.parse(state.getString("month",month.toString()));
   pending=prefs.getString("pending",null); pendingMonth=prefs.getString("pendingMonth",null);
   build();
   if(state==null && pending!=null && new File(pending).length()>0) new AlertDialog.Builder(this).setTitle("Несохранённый снимок").setMessage("Добавить чек к отчёту?").setPositiveButton("Добавить",(d,w)->finishPhoto()).setNegativeButton("Удалить",(d,w)->discard()).setCancelable(false).show();
  }
- @Override protected void onSaveInstanceState(Bundle s){super.onSaveInstanceState(s);s.putString("month",month.toString());}
+ @Override protected void onSaveInstanceState(Bundle s){super.onSaveInstanceState(s);s.putString("month",month.toString());s.putInt("tab",screenTab);}
  int dp(int x){return (int)(x*getResources().getDisplayMetrics().density);}
  TextView label(String text,int size){TextView v=new TextView(this);v.setText(text);v.setTextSize(size);v.setTextColor(color(2));v.setPadding(0,dp(8),0,dp(8));return v;}
  Button button(String text,Runnable fn){Button b=new Button(this);b.setText(text);b.setTextColor(color(2));b.setAllCaps(false);b.setPadding(dp(12),dp(8),dp(12),dp(8));GradientDrawable bg=new GradientDrawable();bg.setColor(color(1));bg.setCornerRadius(dp(14));bg.setStroke(dp(1),color(3));b.setBackground(bg);b.setElevation(dp(5));if(Build.VERSION.SDK_INT>=28){b.setOutlineAmbientShadowColor(color(3));b.setOutlineSpotShadowColor(color(3));}LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(-1,-2);bp.setMargins(0,dp(5),0,dp(5));b.setLayoutParams(bp);b.setOnClickListener(v->fn.run());return b;}
- void build(){
-  ScrollView scroll=new ScrollView(this);page=new LinearLayout(this);page.setOrientation(1);page.setPadding(dp(20),dp(20),dp(20),dp(30));page.setBackgroundColor(color(0));scroll.addView(page);setContentView(scroll);
-  page.addView(label("Мои чеки",30));page.addView(label("Авансы и расходы — всё под рукой",14));
-  LinearLayout nav=new LinearLayout(this);nav.addView(button("‹",()->{month=month.minusMonths(1);refresh();}),new LinearLayout.LayoutParams(dp(48),dp(48)));heading=label("",19);heading.setGravity(Gravity.CENTER);nav.addView(heading,new LinearLayout.LayoutParams(0,-2,1));nav.addView(button("›",()->{month=month.plusMonths(1);refresh();}),new LinearLayout.LayoutParams(dp(48),dp(48)));page.addView(nav);
-  totals=label("",20);page.addView(totals);
-  page.addView(button("＋ Сфотографировать чек",()->camera()));
-  page.addView(button("＋ Загрузить чек из галереи",()->gallery()));
-  page.addView(button("＋ Получен аванс",()->editor("Получен аванс",0,"",(amount,note)->{db.execSQL("INSERT INTO advances(month,amount,note) VALUES(?,?,?)",new Object[]{month.toString(),amount,note});saveBackup();refresh();})));
-  page.addView(button("Отправить чеки за месяц",()->share()));
-  page.addView(button("Настройки",()->new AlertDialog.Builder(this).setTitle("Настройки").setItems(new String[]{"Оформление","Почта получателя"},(d,w)->{if(w==0)appearance();else email();}).show()));
-  page.addView(button("Статус отчёта",()->status()));
-  page.addView(label("Нажми на чек, чтобы открыть фото. Удерживай запись для изменения или удаления.",13));
-  rows=new LinearLayout(this);rows.setOrientation(1);page.addView(rows);refresh();
- }
+ int screenTab=0; MonthlyScreen monthlyScreen;
+ void build(){if(monthlyScreen==null)monthlyScreen=new MonthlyScreen(this);monthlyScreen.render();}
  String money(long value){return String.format(ru,"%,.2f ₽",value/100.0);}
  long sum(String table){try(Cursor c=db.rawQuery("SELECT COALESCE(SUM(amount),0) FROM "+table+" WHERE month=?",new String[]{month.toString()})){c.moveToFirst();return c.getLong(0);}}
- void refresh(){
-  heading.setText(month.format(DateTimeFormatter.ofPattern("LLLL yyyy",ru)));long advance=sum("advances"),expense=sum("receipts");totals.setText("Получено: "+money(advance)+"\nПо чекам: "+money(expense)+"\nОстаток: "+money(advance-expense));rows.removeAllViews();rows.addView(label("Статус: "+new String[]{"Собираю","Отправлен","Принят"}[prefs.getInt("status_"+month,0)],16));
-  try(Cursor c=db.rawQuery("SELECT id,amount,note,photo,created FROM receipts WHERE month=? ORDER BY id DESC",new String[]{month.toString()})){
-   if(c.getCount()==0)rows.addView(label("В этом месяце пока нет чеков",17));
-   while(c.moveToNext()){long id=c.getLong(0),amount=c.getLong(1);String note=c.getString(2),photo=c.getString(3),date=c.getString(4);TextView row=label("🧾 "+money(amount)+"  ·  "+date+"\n"+(note.isEmpty()?"Чек без описания":note),17);row.setOnClickListener(v->viewPhoto(photo));row.setOnLongClickListener(v->{actions("receipts",id,amount,note,photo);return true;});rows.addView(row);}
-  }
-  rows.addView(label("Авансы",21));
-  try(Cursor c=db.rawQuery("SELECT id,amount,note FROM advances WHERE month=? ORDER BY id DESC",new String[]{month.toString()})){while(c.moveToNext()){long id=c.getLong(0),amount=c.getLong(1);String note=c.getString(2);TextView row=label(money(amount)+"  "+note,16);row.setOnLongClickListener(v->{actions("advances",id,amount,note,null);return true;});rows.addView(row);}}
- }
+ void refresh(){build();}
+ @Override protected void onDestroy(){if(monthlyScreen!=null)monthlyScreen.close();super.onDestroy();}
  String b64(String s){return Base64.encodeToString(s.getBytes(java.nio.charset.StandardCharsets.UTF_8),Base64.NO_WRAP);}
  String unb64(String s){try{return new String(Base64.decode(s,Base64.NO_WRAP),java.nio.charset.StandardCharsets.UTF_8);}catch(Exception e){return "";}}
  Uri sharedImage(InputStream in,String name,String mime) throws IOException{
-  ContentValues cv=new ContentValues();cv.put(MediaStore.Images.Media.DISPLAY_NAME,name);cv.put(MediaStore.Images.Media.MIME_TYPE,mime);if(Build.VERSION.SDK_INT>=29)cv.put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES+"/MoiCheki");
+  ContentValues cv=new ContentValues();cv.put(MediaStore.Images.Media.DISPLAY_NAME,name);cv.put(MediaStore.Images.Media.MIME_TYPE,mime);if(Build.VERSION.SDK_INT>=29)cv.put(MediaStore.Images.Media.RELATIVE_PATH,Environment.DIRECTORY_PICTURES+(getPackageName().endsWith(".preview")?"/MoiChekiPreview":"/MoiCheki"));
   Uri u=getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,cv);if(u==null)throw new IOException("Не удалось создать файл в общей папке");
   try(OutputStream out=getContentResolver().openOutputStream(u)){if(out==null)throw new IOException("Не удалось открыть файл");byte[] b=new byte[8192];int n;while((n=in.read(b))!=-1)out.write(b,0,n);}return u;
  }
  String sharedCopy(File source,String name){try(InputStream in=new FileInputStream(source)){String ext=source.getName().toLowerCase(Locale.ROOT);String mime=ext.endsWith(".png")?"image/png":ext.endsWith(".webp")?"image/webp":"image/jpeg";return sharedImage(in,name.substring(0,name.lastIndexOf('.'))+(mime.equals("image/png")?".png":mime.equals("image/webp")?".webp":".jpg"),mime).toString();}catch(Exception e){toast("Не удалось сохранить фото в общей папке");return source.getAbsolutePath();}}
  Uri photoUri(String path){return path!=null&&path.startsWith("content://")?Uri.parse(path):uri(new File(path));}
  void deletePhoto(String path){try{if(path!=null&&path.startsWith("content://"))getContentResolver().delete(Uri.parse(path),null,null);else if(path!=null)new File(path).delete();}catch(Exception ignored){}}
- Uri backupUri(){if(Build.VERSION.SDK_INT<29)return null;try(Cursor c=getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,new String[]{MediaStore.Downloads._ID},MediaStore.Downloads.DISPLAY_NAME+"=?",new String[]{"moi_cheki_backup.txt"},null)){if(c!=null&&c.moveToFirst())return ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI,c.getLong(0));}catch(Exception ignored){}return null;}
- void saveBackup(){if(Build.VERSION.SDK_INT<29)return;try{StringBuilder s=new StringBuilder();try(Cursor c=db.rawQuery("SELECT month,amount,note,photo,created FROM receipts ORDER BY id",null)){while(c.moveToNext())s.append("R|").append(b64(c.getString(0))).append('|').append(c.getLong(1)).append('|').append(b64(c.getString(2))).append('|').append(b64(c.getString(3))).append('|').append(b64(c.getString(4))).append('\n');}try(Cursor c=db.rawQuery("SELECT month,amount,note FROM advances ORDER BY id",null)){while(c.moveToNext())s.append("A|").append(b64(c.getString(0))).append('|').append(c.getLong(1)).append('|').append(b64(c.getString(2))).append('\n');}Uri u=backupUri();ContentValues cv=new ContentValues();cv.put(MediaStore.Downloads.DISPLAY_NAME,"moi_cheki_backup.txt");cv.put(MediaStore.Downloads.MIME_TYPE,"text/plain");if(Build.VERSION.SDK_INT>=29)cv.put(MediaStore.Downloads.RELATIVE_PATH,Environment.DIRECTORY_DOWNLOADS+"/MoiCheki");if(u==null)u=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,cv);if(u!=null){try(OutputStream out=getContentResolver().openOutputStream(u,"wt")){out.write(s.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}}}catch(Exception ignored){}}
+ Uri backupUri(){if(Build.VERSION.SDK_INT<29)return null;try(Cursor c=getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,new String[]{MediaStore.Downloads._ID},MediaStore.Downloads.DISPLAY_NAME+"=?",new String[]{(getPackageName().endsWith(".preview")?"moi_cheki_preview_backup.txt":"moi_cheki_backup.txt")},null)){if(c!=null&&c.moveToFirst())return ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI,c.getLong(0));}catch(Exception ignored){}return null;}
+ void saveBackup(){if(Build.VERSION.SDK_INT<29)return;try{StringBuilder s=new StringBuilder();try(Cursor c=db.rawQuery("SELECT month,amount,note,photo,created FROM receipts ORDER BY id",null)){while(c.moveToNext())s.append("R|").append(b64(c.getString(0))).append('|').append(c.getLong(1)).append('|').append(b64(c.getString(2))).append('|').append(b64(c.getString(3))).append('|').append(b64(c.getString(4))).append('\n');}try(Cursor c=db.rawQuery("SELECT month,amount,note FROM advances ORDER BY id",null)){while(c.moveToNext())s.append("A|").append(b64(c.getString(0))).append('|').append(c.getLong(1)).append('|').append(b64(c.getString(2))).append('\n');}Uri u=backupUri();ContentValues cv=new ContentValues();cv.put(MediaStore.Downloads.DISPLAY_NAME,(getPackageName().endsWith(".preview")?"moi_cheki_preview_backup.txt":"moi_cheki_backup.txt"));cv.put(MediaStore.Downloads.MIME_TYPE,"text/plain");if(Build.VERSION.SDK_INT>=29)cv.put(MediaStore.Downloads.RELATIVE_PATH,Environment.DIRECTORY_DOWNLOADS+"/MoiCheki");if(u==null)u=getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI,cv);if(u!=null){try(OutputStream out=getContentResolver().openOutputStream(u,"wt")){out.write(s.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));}}}catch(Exception ignored){}}
  void restoreBackup(){if(sumSafe("receipts")>0||sumSafe("advances")>0)return;Uri u=backupUri();if(u==null)return;try(InputStream in=getContentResolver().openInputStream(u);BufferedReader r=new BufferedReader(new InputStreamReader(in))){String line;while((line=r.readLine())!=null){String[] p=line.split("\\|",-1);if(p.length>=4&&p[0].equals("A"))db.execSQL("INSERT INTO advances(month,amount,note) VALUES(?,?,?)",new Object[]{unb64(p[1]),Long.parseLong(p[2]),unb64(p[3])});else if(p.length>=6&&p[0].equals("R"))db.execSQL("INSERT INTO receipts(month,amount,note,photo,created) VALUES(?,?,?,?,?)",new Object[]{unb64(p[1]),Long.parseLong(p[2]),unb64(p[3]),unb64(p[4]),unb64(p[5])});}}catch(Exception ignored){}}
  long sumSafe(String table){try(Cursor c=db.rawQuery("SELECT COUNT(*) FROM "+table,null)){c.moveToFirst();return c.getLong(0);}catch(Exception e){return 0;}}
  void editor(String title,long initial,String description,Save save){
@@ -96,7 +78,7 @@ public class MainActivity extends Activity {
   AlertDialog dialog=new AlertDialog.Builder(this).setTitle(title).setView(box).setPositiveButton("Сохранить",null).setNegativeButton("Отмена",(d,w)->{if(title.equals("Новый чек"))discard();if(title.equals("Новый чек из галереи"))cancelGallery();}).create();dialog.setCanceledOnTouchOutside(false);dialog.setOnCancelListener(d->{if(title.equals("Новый чек"))discard();if(title.equals("Новый чек из галереи"))cancelGallery();});
   dialog.setOnShowListener(d->dialog.getButton(-1).setOnClickListener(v->{try{long cents=new BigDecimal(amount.getText().toString().trim().replace(',','.')).movePointRight(2).longValueExact();if(cents<=0 || cents>100000000000L)throw new IllegalArgumentException();save.save(cents,note.getText().toString().trim());dialog.dismiss();}catch(ArithmeticException|IllegalArgumentException e){amount.setError("Введи положительную сумму, до двух знаков после запятой");}}));dialog.show();
  }
- Uri uri(File f){return FileProvider.getUriForFile(this,"ru.klimov.receipts.files",f);}
+ Uri uri(File f){return FileProvider.getUriForFile(this,getPackageName()+".files",f);}
  void camera(){
   if(pending!=null && new File(pending).length()>0){finishPhoto();return;}
   File directory=new File(getFilesDir(),"checks/"+month);if(!directory.exists()&&!directory.mkdirs()){toast("Не удалось создать папку");return;}
